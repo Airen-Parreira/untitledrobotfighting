@@ -19,448 +19,497 @@ if not LocalPlayer.Character or not LocalPlayer.Character.Parent then
     LocalPlayer.CharacterAdded:Wait()
 end
 
-local Fluent = loadstring(game:HttpGet("https://raw.githubusercontent.com/jacklebeignet/Fluent-Reborn/refs/heads/main/src/ui.lua"))()  -- Patched Fluent for 2025 stability
+local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
 local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
 
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Workspace = game:GetService("Workspace")
-
-local LocalPlayer = Players.LocalPlayer
-local Remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
-if not Remotes then return Fluent:Notify({Title = "Error", Content = "Remotes not found—game loaded? Rejoin.", Duration = 5}) end
-
--- Window Setup
 local Window = Fluent:CreateWindow({
-    Title = "CHITO " .. (Fluent.Version or "v1.1"),
-    SubTitle = "by onlyoneflaw (Fixed Dec '25)",
+    Title = "CHITO " .. Fluent.Version,
+    SubTitle = "by onlyoneflaw",
     TabWidth = 160,
     Size = UDim2.fromOffset(580, 460),
-    Acrylic = true,
+    Acrylic = false, -- Blur disabled for compatibility
     Theme = "Dark",
     MinimizeKey = Enum.KeyCode.LeftControl
 })
 
+--Fluent provides Lucide Icons https://lucide.dev/icons/ for the tabs, icons are optional
 local Tabs = {
-    Main = Window:AddTab({ Title = "Main", Icon = "home" }),
+    Main = Window:AddTab({ Title = "Main", Icon = "home" }), -- Added Lucide 'home' icon as logo
     Spin = Window:AddTab({ Title = "Spin", Icon = "rotate-ccw" }),
     Tweaks = Window:AddTab({ Title = "Tweaks", Icon = "sliders" }),
     Abuse = Window:AddTab({ Title = "ABUSE", Icon = "alert-triangle" }),
     Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
 }
 
+
+
+
+
 local Options = Fluent.Options
 
--- ========================
---    UTILS & CONNECTIONS
--- ========================
+do
+            -- Tweaks Tab: Noclip Toggle
+            local noclipEnabled = false
+            local noclipConnection = nil
+            local NoclipToggle = Tabs.Tweaks:AddToggle("NoclipToggle", {
+                Title = "Noclip",
+                Description = "Walk through walls (toggle on/off)",
+                Default = false
+            })
 
-local Connections = {}
-local function AddConnection(connection, name)
-    if Connections[name] then Connections[name]:Disconnect() end
-    Connections[name] = connection
-end
-
-local function DisconnectAll()
-    for _, conn in pairs(Connections) do
-        if conn and conn.Connected then conn:Disconnect() end
-    end
-    Connections = {}
-end
-
-LocalPlayer.CharacterRemoving:Connect(DisconnectAll)  -- Cleanup on death/respawn
-
--- ========================
---  MAIN TAB - Player Highlight + Damage + KO
--- ========================
-
-local SelectedPlayer = nil
-local HighlightInstance = nil
-
-local function UpdatePlayerList()
-    local names = {}
-    for _, plr in Players:GetPlayers() do
-        if plr ~= LocalPlayer and plr.Parent then
-            table.insert(names, plr.Name)
-        end
-    end
-    if Options.PlayerDropdown then
-        Options.PlayerDropdown:SetValues(names)
-    end
-end
-
-local function UpdateHighlight()
-    if HighlightInstance then
-        pcall(function() HighlightInstance:Destroy() end)
-        HighlightInstance = nil
-    end
-
-    if not Options.EnableHighlightToggle or not Options.EnableHighlightToggle.Value or not SelectedPlayer or not SelectedPlayer.Character or not SelectedPlayer.Character.Parent then
-        return
-    end
-
-    pcall(function()
-        HighlightInstance = Instance.new("Highlight")
-        HighlightInstance.Adornee = SelectedPlayer.Character
-        HighlightInstance.FillColor = Color3.fromRGB(255, 0, 0)
-        HighlightInstance.OutlineColor = Color3.new(0, 0, 0)
-        HighlightInstance.FillTransparency = 0.5
-        HighlightInstance.OutlineTransparency = 0
-        HighlightInstance.Parent = SelectedPlayer.Character
-    end)
-end
-
-Tabs.Main:AddToggle("EnableHighlightToggle", {
-    Title = "Enable Highlight",
-    Description = "Highlight selected player",
-    Default = true,
-    Callback = UpdateHighlight
-})
-
-local PlayerDropdown = Tabs.Main:AddDropdown("PlayerDropdown", {
-    Title = "Select Player",
-    Values = {},
-    Multi = false,
-    Default = 1,
-    Callback = function(value)
-        SelectedPlayer = Players:FindFirstChild(value)
-        UpdateHighlight()
-    end
-})
-
-Tabs.Main:AddSlider("DamageMultiplierSlider", {
-    Title = "Damage Multiplier",
-    Description = "Multiply outgoing damage (1-10)",
-    Min = 1,
-    Max = 10,
-    Default = 1,
-    Rounding = 0
-})
-
--- Damage hook (robust, runs once, handles arg shifts from Dec patch)
-if not getgenv().CHITO_DAMAGE_HOOKED then
-    getgenv().CHITO_DAMAGE_HOOKED = true
-    local mt = getrawmetatable(game)
-    local old = mt.__namecall
-    setreadonly(mt, false)
-    mt.__namecall = newcclosure(function(self, ...)
-        local method = getnamecallmethod()
-        local args = {...}
-        if method == "FireServer" and self.Name == "HitReport" and Remotes:FindFirstChild("HitReport") == self then
-            local mult = Options.DamageMultiplierSlider and Options.DamageMultiplierSlider.Value or 1
-            -- Target damage arg (usually [3], but check [2-4] for patch flexibility)
-            for i = 2, 4 do
-                if typeof(args[i]) == "number" and args[i] > 0 then
-                    args[i] = args[i] * mult
-                    break
-                end
-            end
-            return old(self, unpack(args))
-        end
-        return old(self, ...)
-    end)
-    setreadonly(mt, true)
-end
-
-Tabs.Main:AddButton({
-    Title = "Instant K.O",
-    Description = "KO the selected player (updated args for Dec patch)",
-    Callback = function()
-        if not SelectedPlayer or not SelectedPlayer.Parent then
-            Fluent:Notify({Title = "Error", Content = "No valid player selected!", Duration = 3})
-            return
-        end
-
-        local hitRemote = Remotes:FindFirstChild("HitReport")
-        if not hitRemote then
-            Fluent:Notify({Title = "Error", Content = "HitReport remote missing—rejoin?", Duration = 3})
-            return
-        end
-
-        pcall(function()
-            hitRemote:FireServer(
-                SelectedPlayer,
-                "J",  -- Jab type
-                60000,  -- High damage
-                6,  -- Power
-                "HEAD",
-                Vector3.new(77.472, 13.265, -37.025),
-                CFrame.new(77.487, 13.293, -37.228, -0.997443, -0.009605, 0.070818, 0, 0.990927, 0.134398, -0.071466, 0.134054, -0.988394),
-                Vector3.new(0.6, 0.6, 0.41),
-                tick() * 1000  -- Dynamic timestamp to avoid spam filters
-            )
-            Fluent:Notify({Title = "K.O Sent", Content = "Check if they're down!", Duration = 2})
-        end)
-    end
-})
-
-Tabs.Main:AddButton({
-    Title = "Instant Get Up",
-    Description = "Stand up instantly when knocked",
-    Callback = function()
-        local qteRemote = ReplicatedStorage:FindFirstChild("QTECompleteEvent")
-        if not qteRemote then
-            Fluent:Notify({Title = "Error", Content = "QTE remote missing!", Duration = 3})
-            return
-        end
-
-        for i = 1, 9 do
-            local ring = Workspace:FindFirstChild("Rings") and Workspace.Rings:FindFirstChild("Ring" .. i)
-            if ring then
-                pcall(function()
-                    qteRemote:FireServer(ring, 8337479548, true)
-                end)
-            end
-        end
-        Fluent:Notify({Title = "Get Up", Content = "Spam sent—stand tall!", Duration = 2})
-    end
-})
-
--- Dynamic player list updates
-Players.PlayerAdded:Connect(UpdatePlayerList)
-Players.PlayerRemoving:Connect(UpdatePlayerList)
-UpdatePlayerList()
-
--- ========================
---  TWEAKS TAB
--- ========================
-
--- Noclip (fixed loop to avoid char nil errors)
-local NoclipEnabled = false
-Tabs.Tweaks:AddToggle("NoclipToggle", {
-    Title = "Noclip",
-    Description = "Walk through walls",
-    Default = false,
-    Callback = function(state)
-        NoclipEnabled = state
-        if state then
-            AddConnection(RunService.Stepped:Connect(function()
-                pcall(function()
-                    local char = LocalPlayer.Character
-                    if char then
-                        for _, part in char:GetDescendants() do
-                            if part:IsA("BasePart") and part.CanCollide then
-                                part.CanCollide = false
+            local function setNoclip(state)
+                local player = game:GetService("Players").LocalPlayer
+                local function noclipStep()
+                    if player.Character then
+                        for _, part in ipairs(player.Character:GetDescendants()) do
+                            if part:IsA("BasePart") then
+                                part.CanCollide = not state
                             end
                         end
                     end
-                end)
-            end), "NoclipLoop")
-        else
-            if Connections.NoclipLoop then
-                Connections.NoclipLoop:Disconnect()
-                Connections.NoclipLoop = nil
+                end
+                if state then
+                    if not noclipConnection then
+                        noclipConnection = game:GetService("RunService").Stepped:Connect(noclipStep)
+                    end
+                else
+                    if noclipConnection then
+                        noclipConnection:Disconnect()
+                        noclipConnection = nil
+                    end
+                    noclipStep()
+                end
             end
-            pcall(function()
-                local char = LocalPlayer.Character
-                if char then
-                    for _, part in char:GetDescendants() do
-                        if part:IsA("BasePart") and part ~= char:FindFirstChild("HumanoidRootPart") then
-                            part.CanCollide = true
+
+            NoclipToggle:OnChanged(function()
+                noclipEnabled = NoclipToggle.Value
+                setNoclip(noclipEnabled)
+                Fluent:Notify({
+                    Title = "Noclip",
+                    Content = noclipEnabled and "Noclip enabled!" or "Noclip disabled!",
+                    Duration = 2
+                })
+            end)
+        -- ABUSE Tab: Paragraph and Become Robot Button
+        Tabs.Abuse:AddButton({
+            Title = "BECOME ROBOT",
+            Description = "Training ring needs to be empty.",
+            Callback = function()
+                local Players = game:GetService("Players")
+                local player = Players.LocalPlayer
+                local character = player.Character
+
+                -- Immediate warning to user
+                Fluent:Notify({
+                    Title = "BECOME ROBOT",
+                    Content = "Do not do anything for the next 10 seconds. Please wait patiently...",
+                    Duration = 5
+                })
+
+                task.spawn(function()
+                    -- Step 1: Touchinterest
+                    task.wait(2)
+                    Fluent:Notify({
+                        Title = "Step 1/5",
+                        Content = "Joining Training Ring..",
+                        Duration = 2
+                    })
+                    local touchPart = workspace:FindFirstChild("Rings")
+                    if touchPart then
+                        touchPart = touchPart:FindFirstChild("TrainingRing")
+                        if touchPart then
+                            touchPart = touchPart:FindFirstChild("Zones")
+                            if touchPart then
+                                touchPart = touchPart:FindFirstChild("P1Touch")
+                                if touchPart then
+                                    touchPart = touchPart:FindFirstChild("Touch1")
+                                    if touchPart and character and character:FindFirstChild("HumanoidRootPart") then
+                                        firetouchinterest(character.HumanoidRootPart, touchPart, 0)
+                                        firetouchinterest(character.HumanoidRootPart, touchPart, 1)
+                                    end
+                                end
+                            end
                         end
                     end
-                end
-            end)
-        end
-        Fluent:Notify({Title = "Noclip", Content = state and "Enabled" or "Disabled", Duration = 2})
-    end
-})
 
--- Infinite Power (safer destroy)
-Tabs.Tweaks:AddButton({
-    Title = "Infinite Power",
-    Description = "Removes power drain (irreversible til rejoin)",
-    Callback = function()
-        local powerRemote = Remotes:FindFirstChild("PowerReduce")
-        if powerRemote then
-            pcall(function() powerRemote:Destroy() end)
-            Fluent:Notify({Title = "Infinite Power", Content = "Drain removed—go wild!", Duration = 4})
-        else
-            Fluent:Notify({Title = "Infinite Power", Content = "Already removed or not found.", Duration = 3})
-        end
-    end
-})
-
--- Walkspeed (fixed enforce on slider change/respawn)
-local function ApplyWalkspeed()
-    if Connections.Walkspeed then
-        Connections.Walkspeed:Disconnect()
-    end
-    local speed = Options.WalkspeedSlider and Options.WalkspeedSlider.Value or 16
-    AddConnection(RunService.Heartbeat:Connect(function()
-        pcall(function()
-            local char = LocalPlayer.Character
-            if char then
-                local hum = char:FindFirstChildOfClass("Humanoid")
-                if hum and hum.WalkSpeed ~= speed then
-                    hum.WalkSpeed = speed
-                end
-            end
-        end)
-    end), "Walkspeed")
-end
-
-Tabs.Tweaks:AddSlider("WalkspeedSlider", {
-    Title = "Walkspeed",
-    Description = "Enforced walkspeed",
-    Min = 0,
-    Max = 200,
-    Default = 16,
-    Rounding = 0,
-    Callback = ApplyWalkspeed
-})
-
-LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(1)  -- Wait for full load
-    ApplyWalkspeed()
-end)
-if LocalPlayer.Character then ApplyWalkspeed() end
-
--- ========================
---  ABUSE TAB - Become Robot (fixed pathing/teleport spam)
--- ========================
-
-Tabs.Abuse:AddButton({
-    Title = "BECOME ROBOT",
-    Description = "Training ring must be empty! Wait 10s, don't move.",
-    Callback = function()
-        Fluent:Notify({
-            Title = "BECOME ROBOT",
-            Content = "Hold still for 10s—process starting...",
-            Duration = 6
-        })
-
-        task.spawn(function()
-            local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-            local hrp = char:WaitForChild("HumanoidRootPart", 5)
-
-            -- Step 1: Touch ring (chained findFirstChild for safety)
-            task.wait(2)
-            Fluent:Notify({Title = "1/5", Content = "Entering training ring..."})
-            local rings = Workspace:FindFirstChild("Rings")
-            local touch = rings and rings:FindFirstChild("TrainingRing") and rings.TrainingRing:FindFirstChild("Zones") and rings.TrainingRing.Zones:FindFirstChild("P1Touch") and rings.TrainingRing.Zones.P1Touch:FindFirstChild("Touch1")
-            if touch and hrp then
-                firetouchinterest(hrp, touch, 0)
-                task.wait(0.1)
-                firetouchinterest(hrp, touch, 1)
-            end
-
-            -- Step 2: Toggle state (pcall wrapped)
-            task.wait(2)
-            Fluent:Notify({Title = "2/5", Content = "Hacking game state..."})
-            pcall(function() LocalPlayer:SetAttribute("InGameState", false) end)
-            task.wait(0.1)
-            pcall(function() LocalPlayer:SetAttribute("InGameState", true) end)
-
-            -- Step 3: Teleport spam (shorter loop, dynamic CFrame)
-            task.wait(2)
-            Fluent:Notify({Title = "3/5", Content = "Forcing robot teleport..."})
-            local targetCFrame = CFrame.new(-15, 4, 6)
-            for i = 1, 30 do  -- Reduced for less lag
-                pcall(function() if hrp then hrp.CFrame = targetCFrame end end)
-                task.wait(0.07)
-            end
-
-            -- Step 4: Camera fix (per-frame reset)
-            task.wait(2)
-            Fluent:Notify({Title = "4/5", Content = "Stabilizing camera..."})
-            if not getgenv().RobotCamFix then
-                getgenv().RobotCamFix = RunService.RenderStepped:Connect(function()
+                    -- Step 2: Toggle InGameState
+                    task.wait(2)
+                    Fluent:Notify({
+                        Title = "Step 2/5",
+                        Content = "Raping InGameState attribute.",
+                        Duration = 2
+                    })
                     pcall(function()
-                        local cam = Workspace.CurrentCamera
-                        local hum = char:FindFirstChildOfClass("Humanoid")
-                        if hum and cam then
-                            cam.CameraSubject = hum
-                            cam.CameraType = Enum.CameraType.Custom
-                            cam.FieldOfView = 70
-                        end
+                        player:SetAttribute("InGameState", false)
                     end)
+                    task.wait(0.1)
+                    pcall(function()
+                        player:SetAttribute("InGameState", true)
+                    end)
+
+                    -- Step 3: Teleport
+                    task.wait(2)
+                    Fluent:Notify({
+                        Title = "Step 3/5",
+                        Content = "Teleporting...",
+                        Duration = 2
+                    })
+                    -- Spam teleport for 2 seconds to ensure it works even if HumanoidRootPart appears late
+                    local spamTimeout = tick() + 2
+                    while tick() < spamTimeout do
+                        character = player.Character
+                        if character and character:FindFirstChild("HumanoidRootPart") then
+                            pcall(function()
+                                character.HumanoidRootPart.CFrame = CFrame.new(-15, 4, 6)
+                            end)
+                        end
+                        task.wait(0.05)
+                    end
+
+                    -- Step 4: Camera script
+                    task.wait(2)
+                    Fluent:Notify({
+                        Title = "Step 4/5",
+                        Content = "Camera Tweaks..",
+                        Duration = 2
+                    })
+                    local RunService = game:GetService("RunService")
+                    local camera = workspace.CurrentCamera
+                    local function resetCamera()
+                        if player.Character and player.Character:FindFirstChildOfClass("Humanoid") then
+                            camera.CameraSubject = player.Character:FindFirstChildOfClass("Humanoid")
+                            camera.CameraType = Enum.CameraType.Custom
+                            camera.FieldOfView = 70
+                        end
+                    end
+                    if not getgenv().RobotCameraConnection or not getgenv().RobotCameraConnection.Connected then
+                        getgenv().RobotCameraConnection = RunService.RenderStepped:Connect(resetCamera)
+                        print("Camera reset enabled! Original Roblox camera restored.")
+                    end
+
+                    -- Step 5: Success
+                    task.wait(2)
+                    Fluent:Notify({
+                        Title = "Step 5/5",
+                        Content = "Robot morph and state set successfully!",
+                        Duration = 5
+                    })
                 end)
             end
+        })
+    -- Tweaks Tab: Infinite Power Button
+    Tabs.Tweaks:AddButton({
+        Title = "Infinite Power",
+        Description = "can not turn it back off unless rejoin",
+        Callback = function()
+            local remotes = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+            if remotes and remotes:FindFirstChild("PowerReduce") then
+                remotes.PowerReduce:Destroy()
+                -- Notification removed
+            else
+                -- Notification removed
+            end
+        end
+    })
 
-            -- Success
-            task.wait(2)
-            Fluent:Notify({Title = "5/5 - SUCCESS", Content = "Robot mode activated! Test in ring.", Duration = 6})
+    -- Tweaks Tab: Walkspeed (UNKILLABLE 2025 EDITION)
+    local WalkspeedSlider = Tabs.Tweaks:AddSlider("WalkspeedSlider", {
+        Title = "Walkspeed",
+        Description = "Loop walkspeed",
+        Default = 16,
+        Min = 0,
+        Max = 200,
+        Rounding = 0,
+    })
+
+    local Players = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local player = Players.LocalPlayer
+
+    local wsConnection = nil
+    local function enforce()
+        if wsConnection then wsConnection:Disconnect() end
+        local speed = WalkspeedSlider.Value
+        wsConnection = RunService.Heartbeat:Connect(function()
+            local char = player.Character
+            if not char then return end
+            local hum = char:FindFirstChildWhichIsA("Humanoid")
+            if hum and hum.Parent and hum.WalkSpeed ~= speed then
+                hum.WalkSpeed = speed
+            end
         end)
     end
-})
+    WalkspeedSlider:OnChanged(enforce)
+    player.CharacterAdded:Connect(function(char)
+        local hum = char:WaitForChild("Humanoid", 5)
+        if hum then enforce() end
+    end)
+    if player.Character then enforce() end
 
--- ========================
---  SPIN TAB - Auto Spin (fixed invoke order/cooldown)
--- ========================
+    -- Spin Tab UI and Logic
+    local botTiers = {
+        ["Common"] = {"AMBUSH", "FATBOY"},
+        ["Legendary"] = {"ATOM", "MIDAS"},
+        ["Mythic"] = {"GAMBIT"},
+        ["Rare"] = {"AQUABOT", "DANGER ZONE"}
+    }
+    local allBots = {"AMBUSH", "FATBOY", "ATOM", "MIDAS", "GAMBIT", "AQUABOT", "DANGER ZONE"}
 
-local BotList = {"AMBUSH", "FATBOY", "ATOM", "MIDAS", "GAMBIT", "AQUABOT", "DANGER ZONE"}
+    local DesiredBotDropdown = Tabs.Spin:AddDropdown("DesiredBotDropdown", {
+        Title = "Desired Bot",
+        Values = allBots,
+        Multi = false,
+        Default = 1,
+    })
 
-local DesiredBotDropdown = Tabs.Spin:AddDropdown("DesiredBotDropdown", {
-    Title = "Desired Bot",
-    Values = BotList,
-    Multi = false,
-    Default = "GAMBIT"
-})
+    local spinning = false
+    local autoSpinToggle = Tabs.Spin:AddToggle("AutoSpinToggle", {
+        Title = "Auto Spin FOR FREE",
+        Description = "Automatically spin for the desired bot.",
+        Default = false
+    })
 
-local Spinning = false
-Tabs.Spin:AddToggle("AutoSpinToggle", {
-    Title = "Auto Spin (FREE)",
-    Description = "Spins until desired bot (0.2s delay for cooldown)",
-    Default = false,
-    Callback = function(state)
-        Spinning = state
-        if not state then return end
+    local function autoSpin()
+        local desiredBot = DesiredBotDropdown.Value
+        while spinning do
+            -- Spin
+            game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("RequestSpinResult"):InvokeServer()
+            -- Get current bot
+            local botName = game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("GetCurrentBot"):InvokeServer()
+            if botName == desiredBot then
+                Fluent:Notify({
+                    Title = "CHITO Auto Spin",
+                    Content = "Rolled: " .. tostring(botName),
+                    SubContent = "Reopen shop",
+                    Duration = 1
+                })
+                spinning = false
+                autoSpinToggle:SetValue(false)
+                break
+            else
+                Fluent:Notify({
+                    Title = "CHITO Auto Spin",
+                    Content = "Rolled: " .. tostring(botName),
+                    SubContent = "Continuing to spin...",
+                    Duration = 1
+                })
+                task.wait(0.1) -- Faster spinning
+            end
+        end
+    end
 
-        task.spawn(function()
-            local spinRemote = Remotes:FindFirstChild("RequestSpinResult")
-            local getBotRemote = Remotes:FindFirstChild("GetCurrentBot")
-            if not spinRemote or not getBotRemote then
-                Fluent:Notify({Title = "Error", Content = "Spin remotes missing—rejoin?", Duration = 3})
-                Options.AutoSpinToggle:SetValue(false)
+    autoSpinToggle:OnChanged(function()
+        if autoSpinToggle.Value then
+            if not spinning then
+                spinning = true
+                task.spawn(autoSpin)
+            end
+        else
+            spinning = false
+        end
+    end)
+
+
+
+        -- Get all player names except LocalPlayer
+    local function getPlayerNames()
+        local names = {}
+        for _, player in ipairs(game:GetService("Players"):GetPlayers()) do
+            if player ~= game:GetService("Players").LocalPlayer then
+                table.insert(names, player.Name)
+            end
+        end
+        return names
+    end
+    
+    -- Add the 'Enable Highlight' toggle above the player selection dropdown
+    local EnableHighlightToggle = Tabs.Main:AddToggle("EnableHighlightToggle", {
+        Title = "Enable Highlight",
+        Description = "Highlight selected player.",
+        Default = true
+    })
+
+    -- Create the dropdown for player selection
+    local PlayerDropdown = Tabs.Main:AddDropdown("PlayerDropdown", {
+        Title = "Select Player",
+        Values = getPlayerNames(),
+        Multi = false,
+        Default = 1,
+    })
+
+    -- Highlight logic for selected player
+    local lastHighlightedPlayer = nil
+    local function removeHighlight(player)
+        if player and player.Character then
+            for _, v in ipairs(player.Character:GetChildren()) do
+                if v:IsA("Highlight") then
+                    v:Destroy()
+                end
+            end
+        end
+    end
+
+    local function addHighlight(player)
+        if player and player.Character then
+            removeHighlight(player)
+            local hl = Instance.new("Highlight")
+            hl.Adornee = player.Character
+            hl.FillColor = Color3.fromRGB(255, 0, 0)
+            hl.OutlineColor = Color3.fromRGB(0, 0, 0)
+            hl.Parent = player.Character
+        end
+    end
+
+    local function updateHighlight()
+        if EnableHighlightToggle.Value then
+            local selectedName = PlayerDropdown.Value
+            local player = game:GetService("Players"):FindFirstChild(selectedName)
+            if player then
+                if lastHighlightedPlayer and lastHighlightedPlayer ~= player then
+                    removeHighlight(lastHighlightedPlayer)
+                end
+                addHighlight(player)
+                lastHighlightedPlayer = player
+            end
+        else
+            if lastHighlightedPlayer then
+                removeHighlight(lastHighlightedPlayer)
+                lastHighlightedPlayer = nil
+            end
+        end
+    end
+
+    PlayerDropdown:OnChanged(function()
+        updateHighlight()
+    end)
+
+    EnableHighlightToggle:OnChanged(function()
+        updateHighlight()
+    end)
+    
+    -- Update dropdown when players join/leave
+    game:GetService("Players").PlayerAdded:Connect(function()
+        PlayerDropdown:SetValues(getPlayerNames())
+    end)
+    game:GetService("Players").PlayerRemoving:Connect(function()
+        PlayerDropdown:SetValues(getPlayerNames())
+    end)
+    
+
+    -- Main Tab: Damage Multiplier Slider (FIXED - Metatable Namecall Hook)
+    local DamageMultiplierSlider = Tabs.Main:AddSlider("DamageMultiplierSlider", {
+        Title = "Damage Multiplier",
+        Description = "Multiply outgoing damage (1-10)",
+        Default = 1,
+        Min = 1,
+        Max = 10,
+        Rounding = 0,
+    })
+
+    -- Hook ALL FireServer calls via metatable (bypasses anti-hooks, works on any executor)
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+    local HitReport = Remotes:WaitForChild("HitReport")
+
+    if not getgenv()._chitoHitReportHooked then
+        getgenv()._chitoHitReportHooked = true
+        local hookFunc = (hookmetamethod or hookfunction or nil)
+        local mt = getrawmetatable(game)
+        local old_namecall = mt.__namecall
+        setreadonly(mt, false)
+        mt.__namecall = newcclosure(function(self, ...)
+            local args = {...}
+            local method = getnamecallmethod()
+            if method == "FireServer" and self == HitReport then
+                local mult = (Options.DamageMultiplierSlider and Options.DamageMultiplierSlider.Value) or 1
+                if type(args[3]) == "number" then
+                    args[3] = args[3] * mult
+                end
+                return old_namecall(self, unpack(args))
+            end
+            return old_namecall(self, ...)
+        end)
+        setreadonly(mt, true)
+    end
+
+    -- Add the "Instant knockout" button
+    Tabs.Main:AddButton({
+        Title = "Instant K.O",
+        Description = "KO the selected player",
+        Callback = function()
+            local selectedName = PlayerDropdown.Value
+            if not selectedName or selectedName == "" then
+                print("No player selected!")
                 return
             end
+            local args = {
+                game:GetService("Players"):WaitForChild(selectedName),
+                "J",
+                60000,
+                6,
+                "HEAD",
+                vector.create(77.47257995605469, 13.265472412109375, -37.02565002441406),
+                CFrame.new(77.48709106445312, 13.293011665344238, -37.228179931640625, -0.9974430203437805, -0.009604891762137413, 0.07081762701272964, 0, 0.9909273982048035, 0.13439804315567017, -0.07146600633859634, 0.13405439257621765, -0.9883936643600464),
+                vector.create(0.6000000238418579, 0.6000000238418579, 0.40981951355934143),
+                1764960858.5926468
+            }
+            Remotes.HitReport:FireServer(unpack(args))
+            -- Notification removed
+        end
+    })
 
-            while Spinning do
-                pcall(function()
-                    spinRemote:InvokeServer()  -- Spin first
-                    task.wait(0.2)  -- Cooldown buffer (tuned for Dec patch)
-                    local currentBot = getBotRemote:InvokeServer()
-
-                    local notifContent = "Rolled: " .. tostring(currentBot)
-                    if currentBot == DesiredBotDropdown.Value then
-                        notifContent = notifContent .. " - GOT IT! Reopen shop."
-                        Fluent:Notify({Title = "WINNER!", Content = notifContent, Duration = 5})
-                        Spinning = false
-                        Options.AutoSpinToggle:SetValue(false)
-                    else
-                        notifContent = notifContent .. " - Keep spinning..."
-                        Fluent:Notify({Title = "Spin Result", Content = notifContent, Duration = 1})
-                    end
-                end)
-                if Spinning then task.wait(0.1) end
+    -- Add the "Instant Get Up" button under Instant Knockout
+    Tabs.Main:AddButton({
+        Title = "Instant Get Up",
+        Description = "Get up instantly when you're knocked out.",
+        Callback = function()
+            for i = 1, 9 do
+                local ringName = "Ring" .. tostring(i)
+                local args = {
+                    workspace:WaitForChild("Rings"):WaitForChild(ringName),
+                    8337479548,
+                    true
+                }
+                game:GetService("ReplicatedStorage"):WaitForChild("QTECompleteEvent"):FireServer(unpack(args))
             end
-        end)
-    end
-})
+            -- Notification removed
+        end
+    })
+end
 
--- ========================
---  FINAL SETUP
--- ========================
 
+-- Addons:
+-- SaveManager (Allows you to have a configuration system)
+-- InterfaceManager (Allows you to have a interface managment system)
+
+-- Hand the library over to our managers
 SaveManager:SetLibrary(Fluent)
 InterfaceManager:SetLibrary(Fluent)
+
+-- Ignore keys that are used by ThemeManager.
+-- (we dont want configs to save themes, do we?)
 SaveManager:IgnoreThemeSettings()
+
+-- You can add indexes of elements the save manager should ignore
 SaveManager:SetIgnoreIndexes({})
+
+-- use case for doing it this way:
+-- a script hub could have themes in a global folder
+-- and game configs in a separate folder per game
 InterfaceManager:SetFolder("ChitoHub")
 SaveManager:SetFolder("ChitoHub/untitledrobotboxing")
-
 InterfaceManager:BuildInterfaceSection(Tabs.Settings)
-SaveManager:BuildConfigSection(Tabs.Settings)  -- Fixed: Added this for config saving
+
+
 
 Window:SelectTab(1)
-
 Fluent:Notify({
-    Title = "CHITO Hub (Fixed)",
-    Content = "All functions restored—happy exploiting! Report bugs if any.",
+    Title = "ChitoHUB",
+    Content = "ChitoHUB has loaded.",
     Duration = 5
 })
 
+-- You can use the SaveManager:LoadAutoloadConfig() to load a config
+-- which has been marked to be one that auto loads!
 SaveManager:LoadAutoloadConfig()
